@@ -343,7 +343,7 @@ async function renderAdmin(){
 $('#aBody').addEventListener('click',e=>{ if(e.target.id==='retry') renderAdmin(); });
 $('#aCity').onchange=e=>{adm.city=e.target.value;renderAdmin()};
 $('#aTabs').onclick=e=>{const t=e.target.closest('.tab');if(t){adm.tab=t.dataset.t;renderAdmin()}};
-const fail=(e,m='تعذّر تنفيذ العملية')=>{console.error(e);toast(m)};
+const fail=(e,m='تعذّر تنفيذ العملية')=>{console.error(e);toast(m+': '+(e&&e.message?e.message:e));alert(m+'\n'+(e&&e.message?e.message:JSON.stringify(e)))};
 
 /* ---------- الصور ---------- */
 function shrinkFile(file,max=900,qlt=.78){
