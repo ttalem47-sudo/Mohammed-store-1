@@ -198,8 +198,12 @@ label{display:block;font-size:.86rem;color:var(--muted);margin-bottom:4px}
 .imgs .im button{position:absolute;top:2px;inset-inline-end:2px;width:22px;height:22px;border-radius:50%;border:0;background:rgba(0,0,0,.75);color:#fff;font-size:.9rem;line-height:1}
 .seg{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
 .mv{display:flex;flex-direction:column;gap:6px;flex:none}
-.mv button{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--gold2);font-size:.85rem;line-height:1}
+.mv button{width:34px;height:30px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--gold2);font-size:.85rem;line-height:1}
 .mv button:disabled{opacity:.3}
+.mv .num{background:var(--gold);color:var(--on-gold);border-color:var(--gold);font-weight:700;font-size:.9rem;font-family:inherit}
+.rowc[data-oid]{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.rowc.dragging{position:relative;z-index:5;background:var(--panel2);box-shadow:0 12px 30px rgba(0,0,0,.6),0 0 0 2px var(--gold);transition:none}
+.numgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
 .btn i{font-style:normal;background:var(--danger);color:#fff;border-radius:99px;font-size:.7rem;padding:1px 7px;margin-inline-start:4px}
 .trow{padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:8px}
 .trow .tb{display:flex;gap:8px;margin-top:8px}
@@ -401,25 +405,100 @@ async function admOffers(){
   try{ const x=await sb.from('store_settings').select('value').eq('key','offer_layout').maybeSingle(); if(x.data&&x.data.value) lay=x.data.value; }catch(e){}
   const layHTML=`<div class="note" style="margin-bottom:4px">شكل ظهور العروض للزبون (لكل المتجر):</div>
     <div class="seg">${LAYOUTS.map(([k,l])=>`<button class="btn sm${lay===k?' gold':''}" data-layout="${k}">${l}</button>`).join('')}</div>`;
-  return layHTML+`<button class="btn gold" style="width:100%;margin-bottom:12px" id="newOffer">+ عرض جديد</button>`+
+  const hint=os.length>1?`<p class="note" style="margin:0 0 10px">لترتيب العروض: اضغط مطولاً على العرض ثم اسحبه، أو اضغط على رقمه واختر ترتيبه، أو استخدم الأسهم.</p>`:'';
+  return layHTML+hint+`<button class="btn gold" style="width:100%;margin-bottom:12px" id="newOffer">+ عرض جديد</button>`+
     (os.length?os.map((o,i)=>`
-      <div class="rowc"><div class="mv"><button data-up="${o.id}" aria-label="لأعلى"${i===0?' disabled':''}>▲</button><button data-down="${o.id}" aria-label="لأسفل"${i===os.length-1?' disabled':''}>▼</button></div><div class="th">${pic(o)}</div>
+      <div class="rowc" data-oid="${o.id}"><div class="mv"><button data-up="${o.id}" aria-label="لأعلى"${i===0?' disabled':''}>▲</button><button class="num" data-num="${o.id}" aria-label="تحديد الترتيب">${i+1}</button><button data-down="${o.id}" aria-label="لأسفل"${i===os.length-1?' disabled':''}>▼</button></div><div class="th">${pic(o)}</div>
         <div class="g"><b>${esc(o.name)}</b><span>${money(o.price)}</span><div class="note">${esc((o.sizes||[]).join(' · '))}</div></div>
         <div class="acts"><button class="btn sm" data-edit="${o.id}">تعديل</button><button class="btn sm danger" data-del="${o.id}">حذف</button></div>
       </div>`).join(''):'<div class="empty">لا توجد عروض في هذه المدينة. أضف أول عرض.</div>');
 }
-let moving=false;
-async function moveOffer(id,dir){
-  if(moving) return;
-  const os=[...window._offers], i=os.findIndex(o=>o.id===id), j=i+dir;
-  if(i<0||j<0||j>=os.length) return;
-  moving=true;
-  try{
-    [os[i],os[j]]=[os[j],os[i]];
-    await Promise.all(os.map((o,k)=>o.sort_order===k?null:q(sb.from('offers').update({sort_order:k}).eq('id',o.id))).filter(Boolean));
-  } finally { moving=false; }
-  renderAdmin();
+let saveChain=Promise.resolve();
+const flash=r=>{ r.style.transition='box-shadow .3s'; r.style.boxShadow='0 0 0 2px var(--gold)'; setTimeout(()=>{r.style.boxShadow=''},700); };
+/* يقرأ ترتيب الصفوف الحالي من الشاشة، يحدّث الأرقام والأسهم، ويحفظ في الخلفية */
+function applyOrder(){
+  const os=window._offers, rows=$$('#aBody .rowc[data-oid]'), m=new Map(os.map(o=>[o.id,o]));
+  const ordered=rows.map(r=>m.get(r.dataset.oid)).filter(Boolean);
+  if(ordered.length!==os.length) return;
+  window._offers=ordered;
+  rows.forEach((r,k)=>{ const u=r.querySelector('[data-up]'),d=r.querySelector('[data-down]'),n=r.querySelector('[data-num]');
+    if(u) u.disabled=k===0; if(d) d.disabled=k===rows.length-1; if(n) n.textContent=k+1; });
+  const ups=[]; ordered.forEach((o,k)=>{ if(o.sort_order!==k){ o.sort_order=k; ups.push([o.id,k]); } });
+  if(!ups.length) return;
+  saveChain=saveChain.then(()=>Promise.all(ups.map(([oid,k])=>q(sb.from('offers').update({sort_order:k}).eq('id',oid)))))
+    .catch(err=>{ fail(err,'تعذّر حفظ الترتيب'); renderAdmin(); });
 }
+/* ينقل العرض إلى خانة محددة (0 = الأول) ويثبّت موضعه على الشاشة */
+function moveToIndex(id,p){
+  const rows=$$('#aBody .rowc[data-oid]'), a=rows.find(r=>r.dataset.oid===id); if(!a) return;
+  const others=rows.filter(r=>r!==a); p=Math.max(0,Math.min(p,others.length));
+  const top0=a.getBoundingClientRect().top;
+  if(p>=others.length) others[others.length-1].after(a); else others[p].before(a);
+  window.scrollBy(0,a.getBoundingClientRect().top-top0);
+  applyOrder(); flash(a);
+}
+function moveOffer(id,dir){
+  const i=window._offers.findIndex(o=>o.id===id); if(i<0) return;
+  const j=i+dir; if(j<0||j>=window._offers.length) return;
+  moveToIndex(id,j);
+}
+function numSheet(id){
+  const os=window._offers, i=os.findIndex(o=>o.id===id); if(i<0) return;
+  const box=$('#formBox'); box.onchange=null; formCleanup=null;
+  box.innerHTML=`<div class="in"><h2 style="margin:0 0 6px;font-family:var(--font-display)">ترتيب العرض</h2>
+    <p class="note" style="margin:0 0 12px">«${esc(os[i].name)}» — ترتيبه الآن ${i+1}. اختر الترتيب الجديد:</p>
+    <div class="numgrid">${os.map((_,k)=>`<button class="btn${k===i?' gold':''}" data-pos="${k}">${k+1}</button>`).join('')}</div>
+    <button class="btn" style="width:100%" data-close>إلغاء</button></div>`;
+  box.onclick=e=>{
+    if(e.target.closest('[data-close]')) return closeForm();
+    const b=e.target.closest('[data-pos]'); if(!b) return;
+    closeForm(); moveToIndex(id,+b.dataset.pos);
+  };
+  $('#form').classList.add('on'); document.body.style.overflow='hidden';
+}
+
+/* ---- السحب بالضغط المطوّل ---- */
+let drag=null, lpT=null, lp=null;
+document.addEventListener('touchmove',e=>{ if(drag) e.preventDefault(); },{passive:false});
+$('#aBody').addEventListener('contextmenu',e=>{ if(e.target.closest('.rowc[data-oid]')) e.preventDefault(); });
+$('#aBody').addEventListener('pointerdown',e=>{
+  const row=e.target.closest('.rowc[data-oid]');
+  if(!row||e.target.closest('button,input,a')||(e.pointerType==='mouse'&&e.button!==0)||drag) return;
+  lp={row,x:e.clientX,y:e.clientY};
+  clearTimeout(lpT); lpT=setTimeout(startDrag,450);
+});
+window.addEventListener('pointermove',e=>{
+  if(drag){ drag.y=e.clientY; updDrag(); return; }
+  if(lp&&Math.hypot(e.clientX-lp.x,e.clientY-lp.y)>8){ clearTimeout(lpT); lp=null; }
+});
+const endLp=()=>{ clearTimeout(lpT); lp=null; if(drag) dropDrag(); };
+window.addEventListener('pointerup',endLp); window.addEventListener('pointercancel',endLp);
+function startDrag(){
+  if(!lp) return;
+  const row=lp.row, r=row.getBoundingClientRect();
+  drag={row,y:lp.y,grab:lp.y-r.top,raf:0}; lp=null;
+  row.classList.add('dragging'); document.body.style.userSelect='none';
+  if(navigator.vibrate) navigator.vibrate(25);
+  const loop=()=>{ if(!drag) return;
+    if(drag.y<90) window.scrollBy(0,-12); else if(drag.y>innerHeight-90) window.scrollBy(0,12);
+    updDrag(); drag.raf=requestAnimationFrame(loop); };
+  loop();
+}
+function updDrag(){
+  const row=drag.row, others=$$('#aBody .rowc[data-oid]').filter(x=>x!==row);
+  let before=null;
+  for(const o of others){ const b=o.getBoundingClientRect(); if(drag.y<b.top+b.height/2){ before=o; break; } }
+  if(before){ if(row.nextElementSibling!==before) before.before(row); }
+  else { const last=others[others.length-1]; if(last&&last.nextElementSibling!==row) last.after(row); }
+  row.style.transform=''; const nat=row.getBoundingClientRect().top;
+  row.style.transform=`translateY(${drag.y-drag.grab-nat}px) scale(1.02)`;
+}
+function dropDrag(){
+  const d=drag; drag=null; cancelAnimationFrame(d.raf);
+  d.row.classList.remove('dragging'); d.row.style.transform=''; document.body.style.userSelect='';
+  applyOrder(); flash(d.row);
+}
+
 function offerForm(o){
   const d=o?{name:o.name,price:o.price,desc:o.description,sizes:[...(o.sizes||[])],colors:[...(o.colors||[])],images:[...(o.images||[])],shape:o.shape||'tee'}
            :{name:'',price:'',desc:'',sizes:['S','M','L','XL'],colors:[],images:[],shape:'tee'};
@@ -544,8 +623,9 @@ $('#aBody').addEventListener('click',async e=>{
   const t=e.target, qa=a=>t.closest('['+a+']'); let b;
   try{
     if(t.id==='newOffer') return offerForm(null);
-    if(b=qa('data-up')) return moveOffer(b.dataset.up,-1);
-    if(b=qa('data-down')) return moveOffer(b.dataset.down,1);
+    if(b=qa('data-num')){ numSheet(b.dataset.num); return; }
+    if(b=qa('data-up')) { moveOffer(b.dataset.up,-1); return; }
+    if(b=qa('data-down')) { moveOffer(b.dataset.down,1); return; }
     if(b=qa('data-layout')){ await q(sb.from('store_settings').upsert({key:'offer_layout',value:b.dataset.layout},{onConflict:'key'})); toast('تم تغيير شكل العرض'); return renderAdmin(); }
     if(b=qa('data-edit')) return offerForm(window._offers.find(o=>o.id===b.dataset.edit));
     if(b=qa('data-del')){
